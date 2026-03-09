@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PostHog Paddock</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+
+  <!-- ── Header ── -->
+  <header>
+    <div class="container inner">
+      <h1>🦔 <span>PostHog</span> Paddock</h1>
+      <div class="header-right">
+        <span id="user-display" class="text-sm text-muted">Not identified</span>
+        <span><span id="status-dot" class="status-dot err"></span><span id="status-text">Disconnected</span></span>
+      </div>
+    </div>
+  </header>
+
+  <main class="container">
+
+    <!-- ── Setup ── -->
+    <section id="setup-section">
+      <h2>⚙️ Setup</h2>
+      <p class="text-sm text-muted mb-1">Enter your PostHog Project API key to initialize the client-side SDK. Server-side flags are configured via <code>.env</code>.</p>
+      <div class="grid-2">
+        <div class="form-row">
+          <label for="api-key">Project API Key</label>
+          <input id="api-key" type="text" placeholder="phc_..." value="{{ project_api_key }}">
+        </div>
+        <div class="form-row">
+          <label for="api-host">API Host</label>
+          <select id="api-host">
+            <option value="https://us.i.posthog.com" {{ 'selected' if posthog_host == 'https://us.i.posthog.com' }}>US Cloud</option>
+            <option value="https://eu.i.posthog.com" {{ 'selected' if posthog_host == 'https://eu.i.posthog.com' }}>EU Cloud</option>
+          </select>
+        </div>
+      </div>
+      <button id="btn-connect" class="primary mt-1">Connect</button>
+    </section>
+
+    <!-- ── Identify ── -->
+    <section id="identify-section">
+      <h2>👤 People &amp; Identification</h2>
+      <div class="grid-2">
+        <div>
+          <div class="form-row">
+            <label for="distinct-id">Distinct ID / Username</label>
+            <input id="distinct-id" type="text" placeholder="user_123">
+          </div>
+          <div class="form-row">
+            <label for="person-email">Email (optional)</label>
+            <input id="person-email" type="email" placeholder="user@example.com">
+          </div>
+          <div class="form-row">
+            <label for="person-name">Name (optional)</label>
+            <input id="person-name" type="text" placeholder="Jane Doe">
+          </div>
+          <div class="btn-group mt-1">
+            <button id="btn-identify" class="primary">Identify</button>
+            <button id="btn-reset">Reset</button>
+            <button id="btn-set-props">Set Person Properties</button>
+          </div>
+        </div>
+        <div>
+          <p class="text-sm text-muted mb-1">Identification links an anonymous user to a known identity. Reset generates a new anonymous ID.</p>
+          <p class="text-sm text-muted">Current ID: <code id="current-distinct-id">–</code></p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── Feature Flags (from server cache) ── -->
+    <section id="flags-section">
+      <h2>🚩 Feature Flags <span class="text-xs text-muted">(server-side local evaluation)</span></h2>
+      <p class="text-sm text-muted mb-1">These flags are evaluated locally by the Python backend using the PostHog SDK and cached. The frontend fetches the cached results.</p>
+
+      <div class="grid-3" id="flag-cards">
+
+        <!-- hog-spin -->
+        <div class="card">
+          <h3>hog-spin</h3>
+          <p class="text-xs text-muted mb-1">Boolean flag</p>
+          <div id="flag-spin-display">
+            <div class="flag-loading">Loading…</div>
+          </div>
+          <div id="flag-spin-badge" class="mt-1"></div>
+        </div>
+
+        <!-- hog-dance -->
+        <div class="card">
+          <h3>hog-dance</h3>
+          <p class="text-xs text-muted mb-1">Variants: sonic · cgi · triple</p>
+          <div id="flag-dance-display">
+            <div class="flag-loading">Loading…</div>
+          </div>
+          <div id="flag-dance-badge" class="mt-1"></div>
+        </div>
+
+        <!-- hog-action -->
+        <div class="card">
+          <h3>hog-action</h3>
+          <p class="text-xs text-muted mb-1">Variants: run · sleep · swim</p>
+          <div id="flag-action-display">
+            <div class="flag-loading">Loading…</div>
+          </div>
+          <div id="flag-action-badge" class="mt-1"></div>
+        </div>
+
+      </div>
+
+      <div class="flex items-center justify-between mt-1">
+        <span class="text-xs text-muted" id="cache-info">Cache age: –</span>
+        <button id="btn-reload-flags" class="sm">Reload Flags from Server</button>
+      </div>
+    </section>
+
+    <!-- ── Quick Events ── -->
+    <section id="events-section">
+      <h2>📊 Events</h2>
+      <p class="text-sm text-muted mb-1">Fire common PostHog events with one click.</p>
+      <div class="btn-group">
+        <button class="quick-event" data-event="button_clicked" data-props='{"button":"signup_cta"}'>Button Clicked</button>
+        <button class="quick-event" data-event="page_viewed" data-props='{"page":"/pricing"}'>Page Viewed</button>
+        <button class="quick-event" data-event="feature_used" data-props='{"feature":"dark_mode"}'>Feature Used</button>
+        <button class="quick-event" data-event="item_purchased" data-props='{"item":"pro_plan","price":29}'>Item Purchased</button>
+        <button class="quick-event" data-event="form_submitted" data-props='{"form":"contact"}'>Form Submitted</button>
+        <button class="quick-event" data-event="search_performed" data-props='{"query":"hedgehog"}'>Search Performed</button>
+      </div>
+
+      <div class="mt-2">
+        <h3 class="text-sm mb-1">Custom Event</h3>
+        <div class="grid-2">
+          <div class="form-row">
+            <label for="custom-event-name">Event Name</label>
+            <input id="custom-event-name" type="text" placeholder="my_custom_event" value="button_clicked">
+          </div>
+          <div class="form-row">
+            <label for="custom-event-props">Properties (JSON)</label>
+            <textarea id="custom-event-props" rows="2" placeholder='{"key": "value"}'>{"button_name": "signup_cta", "page": "pricing"}</textarea>
+          </div>
+        </div>
+        <button id="btn-send-event" class="primary sm">Send Custom Event</button>
+      </div>
+    </section>
+
+    <!-- ── Error Tracking ── -->
+    <section id="errors-section">
+      <h2>🐛 Error Tracking</h2>
+      <p class="text-sm text-muted mb-1">Send test exceptions to PostHog. These appear as $exception events.</p>
+      <div class="grid-2">
+        <div>
+          <div class="form-row">
+            <label for="error-message">Error Message</label>
+            <input id="error-message" type="text" value="Something went wrong in the paddock!">
+          </div>
+          <div class="form-row">
+            <label for="error-type">Error Type</label>
+            <input id="error-type" type="text" value="PaddockError">
+          </div>
+        </div>
+        <div>
+          <div class="form-row">
+            <label for="error-source">Source File</label>
+            <input id="error-source" type="text" value="paddock.js">
+          </div>
+          <div class="form-row">
+            <label>&nbsp;</label>
+            <div class="btn-group">
+              <button id="btn-send-error" class="danger">Send Exception</button>
+              <button id="btn-throw-error" class="danger">Throw Real Error</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── Event Log ── -->
+    <section id="log-section">
+      <h2 class="flex items-center justify-between">
+        📜 Event Log
+        <button id="btn-clear-log" class="sm">Clear</button>
+      </h2>
+      <div id="event-log-list">
+        <p class="text-sm text-muted" id="log-empty">No events yet. Connect and start interacting!</p>
+      </div>
+    </section>
+
+  </main>
+
+  <div id="toast-container"></div>
+
+  <!-- PostHog JS SDK (loaded from CDN) -->
+  <script>
+    !function(t,e){var o,n,p,r;e.__SV||(window.posthog=e,e._i=[],e.init=function(i,s,a){function g(t,e){var o=e.split(".");2==o.length&&(t=t[o[0]],e=o[1]),t[e]=function(){t.push([e].concat(Array.prototype.slice.call(arguments,0)))}}(p=t.createElement("script")).type="text/javascript",p.crossOrigin="anonymous",p.async=!0,p.src=s.api_host.replace(".i.posthog.com","-assets.i.posthog.com")+"/static/array.js",(r=t.getElementsByTagName("script")[0]).parentNode.insertBefore(p,r);var u=e;for(void 0!==a?u=e[a]=[]:a="posthog",u.people=u.people||[],u.toString=function(t){var e="posthog";return"posthog"!==a&&(e+="."+a),t||(e+=" (stub)"),e},u.people.toString=function(){return u.toString(1)+".people (stub)"},o="init capture register register_once register_for_session unregister unregister_for_session getFeatureFlag getFeatureFlagPayload isFeatureEnabled reloadFeatureFlags updateEarlyAccessFeatureEnrollment getEarlyAccessFeatures on onFeatureFlags onSessionId getSurveys getActiveMatchingSurveys renderSurvey canRenderSurvey getNextSurveyStep identify setPersonProperties group resetGroups getGroups setPersonPropertiesForFlags resetPersonPropertiesForFlags setGroupPropertiesForFlags resetGroupPropertiesForFlags reset get_distinct_id getGroups get_session_id get_session_replay_url alias set_config startSessionRecording stopSessionRecording sessionRecordingStarted captureException loadToolbar get_property getSessionProperty createPersonProfile opt_in_capturing opt_out_capturing has_opted_in_capturing has_opted_out_capturing clear_opt_in_out_capturing debug".split(" "),n=0;n<o.length;n++)g(u,o[n]);e._i.push([i,s,a])},e.__SV=1)}(document,window.posthog||[]);
+  </script>
+  <script src="/static/js/app.js"></script>
+</body>
+</html>
