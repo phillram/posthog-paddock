@@ -67,6 +67,21 @@ def reload_flags():
     })
 
 
+@app.route("/api/flags/all")
+def get_all_flags():
+    """Return all feature flags and their values for a user."""
+    if not flag_cache:
+        return jsonify({"error": "PostHog not configured. Set .env variables."}), 503
+
+    distinct_id = request.args.get("distinct_id", "anonymous")
+    all_flags = flag_cache.get_all_flags(distinct_id)
+
+    return jsonify({
+        "flags": all_flags,
+        "distinct_id": distinct_id,
+    })
+
+
 @app.route("/api/status")
 def status():
     """Server health and cache info."""

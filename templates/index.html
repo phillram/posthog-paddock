@@ -38,7 +38,10 @@
           </select>
         </div>
       </div>
-      <button id="btn-connect" class="primary mt-1">Connect</button>
+      <div class="btn-group mt-1">
+        <button id="btn-connect" class="primary">Connect</button>
+        <button id="btn-disconnect" class="danger hidden">Disconnect &amp; Clear Saved Session</button>
+      </div>
     </section>
 
     <!-- ── Identify ── -->
@@ -86,6 +89,10 @@
             <div class="flag-loading">Loading…</div>
           </div>
           <div id="flag-spin-badge" class="mt-1"></div>
+          <div class="variant-buttons mt-1">
+            <button class="variant-btn sm" onclick="setFlagVariant('hog-spin', true)">true</button>
+            <button class="variant-btn sm" onclick="setFlagVariant('hog-spin', false)">false</button>
+          </div>
         </div>
 
         <!-- hog-dance -->
@@ -96,6 +103,12 @@
             <div class="flag-loading">Loading…</div>
           </div>
           <div id="flag-dance-badge" class="mt-1"></div>
+          <div class="variant-buttons mt-1">
+            <button class="variant-btn sm" onclick="setFlagVariant('hog-dance', 'sonic')">sonic</button>
+            <button class="variant-btn sm" onclick="setFlagVariant('hog-dance', 'cgi')">cgi</button>
+            <button class="variant-btn sm" onclick="setFlagVariant('hog-dance', 'triple')">triple</button>
+            <button class="variant-btn sm" onclick="setFlagVariant('hog-dance', false)">off</button>
+          </div>
         </div>
 
         <!-- hog-action -->
@@ -106,6 +119,12 @@
             <div class="flag-loading">Loading…</div>
           </div>
           <div id="flag-action-badge" class="mt-1"></div>
+          <div class="variant-buttons mt-1">
+            <button class="variant-btn sm" onclick="setFlagVariant('hog-action', 'run')">run</button>
+            <button class="variant-btn sm" onclick="setFlagVariant('hog-action', 'sleep')">sleep</button>
+            <button class="variant-btn sm" onclick="setFlagVariant('hog-action', 'swim')">swim</button>
+            <button class="variant-btn sm" onclick="setFlagVariant('hog-action', false)">off</button>
+          </div>
         </div>
 
       </div>
@@ -113,6 +132,18 @@
       <div class="flex items-center justify-between mt-1">
         <span class="text-xs text-muted" id="cache-info">Cache age: –</span>
         <button id="btn-reload-flags" class="sm">Reload Flags from Server</button>
+      </div>
+    </section>
+
+    <!-- ── All Project Flags ── -->
+    <section id="all-flags-section">
+      <h2 class="flex items-center justify-between">
+        🏁 All Project Flags
+        <button id="btn-refresh-all-flags" class="sm">Refresh</button>
+      </h2>
+      <p class="text-sm text-muted mb-1">All feature flags on the project. Flags applied to the current user are highlighted. Use the toggle to override a flag for this user via <code>posthog-js</code>.</p>
+      <div id="all-flags-list">
+        <p class="text-sm text-muted">Loading flags…</p>
       </div>
     </section>
 

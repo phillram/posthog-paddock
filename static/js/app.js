@@ -20,6 +20,8 @@ const GIFS = {
 
 let posthogReady = false;
 const eventLog = [];
+let allFlagsData = {}; // all project flags and their current values
+let flagOverrides = {}; // client-side overrides
 
 // ── DOM helpers ──
 
@@ -48,14 +50,11 @@ function addLog(type, name, props) {
 
 function renderLog() {
   const list = $("#event-log-list");
-  const empty = $("#log-empty");
   if (eventLog.length === 0) {
-    empty.classList.remove("hidden");
+    list.innerHTML = `<p class="text-sm text-muted">No events yet. Connect and start interacting!</p>`;
     return;
   }
-  empty.classList.add("hidden");
 
-  // Build HTML for all entries
   list.innerHTML = eventLog
     .map((e) => {
       const propsStr = Object.keys(e.props).length
@@ -71,9 +70,68 @@ function renderLog() {
     .join("");
 }
 
+// ── localStorage persistence ──
+
+const STORAGE_KEY = "paddock_session";
+
+function saveSession() {
+  const data = {
+    apiKey: $("#api-key").value.trim(),
+    apiHost: $("#api-host").value,
+    distinctId: $("#distinct-id").value.trim(),
+    email: $("#person-email").value.trim(),
+    personName: $("#person-name").value.trim(),
+    connected: posthogReady,
+    flagOverrides,
+  };
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+}
+
+function loadSession() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+function clearSession() {
+  localStorage.removeItem(STORAGE_KEY);
+}
+
+function restoreSession() {
+  const session = loadSession();
+  if (!session) return;
+
+  if (session.apiKey) $("#api-key").value = session.apiKey;
+  if (session.apiHost) $("#api-host").value = session.apiHost;
+  if (session.distinctId) $("#distinct-id").value = session.distinctId;
+  if (session.email) $("#person-email").value = session.email;
+  if (session.personName) $("#person-name").value = session.personName;
+  if (session.flagOverrides) flagOverrides = session.flagOverrides;
+
+  // Auto-reconnect if previously connected
+  if (session.connected && session.apiKey) {
+    initPostHog(true); // silent = true, no duplicate toasts
+    // Re-identify if there was a distinct ID
+    if (session.distinctId) {
+      setTimeout(() => {
+        const properties = {};
+        if (session.email) properties.email = session.email;
+        if (session.personName) properties.name = session.personName;
+        posthog.identify(session.distinctId, properties);
+        $("#current-distinct-id").textContent = session.distinctId;
+        $("#user-display").textContent = session.personName || session.email || session.distinctId;
+      }, 500);
+    }
+  }
+}
+
 // ── PostHog JS init ──
 
-function initPostHog() {
+function initPostHog(silent) {
   const apiKey = $("#api-key").value.trim();
   const apiHost = $("#api-host").value;
   if (!apiKey) {
@@ -91,18 +149,48 @@ function initPostHog() {
   posthogReady = true;
   $("#status-dot").className = "status-dot ok";
   $("#status-text").textContent = "Connected";
+  $("#btn-disconnect").classList.remove("hidden");
   $("#current-distinct-id").textContent = posthog.get_distinct_id();
-  toast("PostHog connected!", "success");
-  addLog("event", "PostHog Initialized", { host: apiHost });
 
-  // Fetch flags from server now that we're connected
+  if (!silent) {
+    toast("PostHog connected!", "success");
+    addLog("event", "PostHog Initialized", { host: apiHost });
+  }
+
+  saveSession();
   fetchFlags();
+  fetchAllFlags();
+}
+
+function disconnectPostHog() {
+  if (posthogReady) {
+    posthog.reset();
+  }
+  posthogReady = false;
+  flagOverrides = {};
+  allFlagsData = {};
+
+  clearSession();
+
+  $("#status-dot").className = "status-dot err";
+  $("#status-text").textContent = "Disconnected";
+  $("#btn-disconnect").classList.add("hidden");
+  $("#current-distinct-id").textContent = "–";
+  $("#user-display").textContent = "Not identified";
+  $("#distinct-id").value = "";
+  $("#person-email").value = "";
+  $("#person-name").value = "";
+
+  renderAllFlags({});
+  toast("Disconnected. Saved session cleared.", "info");
+  addLog("event", "Disconnected", {});
 }
 
 // ── Feature Flags (fetched from Python backend cache) ──
 
 async function fetchFlags() {
-  const distinctId = posthogReady ? posthog.get_distinct_id() : "anonymous";
+  let distinctId = "anonymous";
+  try { distinctId = posthogReady ? posthog.get_distinct_id() || "anonymous" : "anonymous"; } catch {}
   try {
     const res = await fetch(`/api/flags?distinct_id=${encodeURIComponent(distinctId)}`);
     const data = await res.json();
@@ -122,24 +210,40 @@ async function fetchFlags() {
 }
 
 async function reloadFlags() {
-  const distinctId = posthogReady ? posthog.get_distinct_id() : "anonymous";
+  let distinctId = "anonymous";
+  try { distinctId = posthogReady ? posthog.get_distinct_id() || "anonymous" : "anonymous"; } catch {}
   try {
     const res = await fetch("/api/flags/reload", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ distinct_id: distinctId }),
     });
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      toast(errData.error || `Server error ${res.status}`, "error");
+      return;
+    }
     const data = await res.json();
     renderFlags(data.flags);
     $("#cache-info").textContent = `Cache age: 0s · Evaluated for: ${data.distinct_id}`;
     toast("Flags reloaded!", "success");
     addLog("flag", "Flags Reloaded", data.flags);
   } catch (err) {
-    toast("Failed to reload flags.", "error");
+    toast("Failed to reload flags: " + err.message, "error");
+    console.error("Reload flags error:", err);
   }
 }
 
+// Track current hedgehog flag values so variant buttons can reference them
+let currentHogFlags = { "hog-spin": null, "hog-dance": null, "hog-action": null };
+
 function renderFlags(flags) {
+  currentHogFlags = {
+    "hog-spin": flags["hog-spin"],
+    "hog-dance": flags["hog-dance"],
+    "hog-action": flags["hog-action"],
+  };
+
   // ── hog-spin: boolean ──
   const spinValue = flags["hog-spin"];
   let spinHtml;
@@ -199,6 +303,153 @@ function renderFlags(flags) {
 
   $("#flag-action-display").innerHTML = actionHtml;
   $("#flag-action-badge").innerHTML = actionBadge;
+
+  // Highlight active variant buttons
+  highlightVariantButtons();
+}
+
+function highlightVariantButtons() {
+  $$(".variant-btn").forEach((btn) => {
+    const onclick = btn.getAttribute("onclick") || "";
+    // Parse the flag key and value from the onclick attribute
+    const match = onclick.match(/setFlagVariant\('([^']+)',\s*(.+)\)/);
+    if (!match) return;
+
+    const key = match[1];
+    let btnValue = match[2].trim();
+    // Convert string representations to actual values
+    if (btnValue === "true") btnValue = true;
+    else if (btnValue === "false") btnValue = false;
+    else btnValue = btnValue.replace(/^'|'$/g, ""); // strip quotes
+
+    const currentValue = currentHogFlags[key];
+
+    if (currentValue === btnValue) {
+      btn.classList.add("active");
+    } else {
+      btn.classList.remove("active");
+    }
+  });
+}
+
+function setFlagVariant(flagKey, value) {
+  if (!posthogReady) { toast("Connect PostHog first.", "error"); return; }
+
+  // Override the flag client-side
+  posthog.featureFlags.override({ [flagKey]: value });
+  flagOverrides[flagKey] = value;
+
+  // Update the display immediately
+  currentHogFlags[flagKey] = value;
+  renderFlags(currentHogFlags);
+
+  // Also update the all-flags list if it has this key
+  if (flagKey in allFlagsData) {
+    allFlagsData[flagKey] = value;
+    renderAllFlags(allFlagsData);
+  }
+
+  const displayValue = value === true ? "true" : value === false ? "false" : value;
+  toast(`${flagKey} → ${displayValue}`, "success");
+  addLog("flag", `Set ${flagKey}`, { value: displayValue });
+  saveSession();
+}
+
+// ── All Project Flags ──
+
+async function fetchAllFlags() {
+  let distinctId = "anonymous";
+  try { distinctId = posthogReady ? posthog.get_distinct_id() || "anonymous" : "anonymous"; } catch {}
+  try {
+    const res = await fetch(`/api/flags/all?distinct_id=${encodeURIComponent(distinctId)}`);
+    const data = await res.json();
+    if (data.error) {
+      toast(data.error, "error");
+      return;
+    }
+    allFlagsData = data.flags || {};
+    renderAllFlags(allFlagsData);
+  } catch (err) {
+    console.error("Failed to fetch all flags:", err);
+  }
+}
+
+function renderAllFlags(flags) {
+  const container = $("#all-flags-list");
+  const keys = Object.keys(flags);
+
+  if (keys.length === 0) {
+    container.innerHTML = `<p class="text-sm text-muted">No flags found. Connect and check your PostHog configuration.</p>`;
+    return;
+  }
+
+  container.innerHTML = keys
+    .sort()
+    .map((key) => {
+      const value = flags[key];
+      const isActive = value !== false && value !== null && value !== undefined;
+      const displayValue = value === true ? "true" : value === false ? "false" : value === null ? "null" : String(value);
+      const isOverridden = key in flagOverrides;
+
+      return `
+        <div class="flag-row ${isActive ? "active" : ""}">
+          <span class="flag-key">${escapeHtml(key)}</span>
+          <span class="flag-value">
+            ${isActive
+              ? `<span class="badge badge-true">${escapeHtml(displayValue)}</span>`
+              : `<span class="badge badge-false">${escapeHtml(displayValue)}</span>`
+            }
+            ${isOverridden ? `<span class="badge badge-cache">overridden</span>` : ""}
+          </span>
+          <span class="flag-status text-xs ${isActive ? "" : "text-muted"}">${isActive ? "Applied" : "Not applied"}</span>
+          <label class="toggle" title="Toggle override for this flag">
+            <input type="checkbox" data-flag-key="${escapeHtml(key)}" ${isActive ? "checked" : ""} onchange="toggleFlagOverride(this)">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>`;
+    })
+    .join("");
+}
+
+function escapeHtml(str) {
+  const div = document.createElement("div");
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+function toggleFlagOverride(checkbox) {
+  if (!posthogReady) {
+    toast("Connect PostHog first.", "error");
+    checkbox.checked = !checkbox.checked;
+    return;
+  }
+
+  const key = checkbox.dataset.flagKey;
+  const currentValue = allFlagsData[key];
+
+  if (checkbox.checked) {
+    // Enable: override to true (for boolean flags) or restore previous value
+    const overrideValue = (currentValue === false || currentValue === null) ? true : currentValue;
+    posthog.featureFlags.override({ [key]: overrideValue });
+    flagOverrides[key] = overrideValue;
+    allFlagsData[key] = overrideValue;
+    toast(`Flag "${key}" overridden to: ${overrideValue}`, "success");
+    addLog("flag", `Override: ${key}`, { value: overrideValue });
+  } else {
+    // Disable: override to false
+    posthog.featureFlags.override({ [key]: false });
+    flagOverrides[key] = false;
+    allFlagsData[key] = false;
+    toast(`Flag "${key}" overridden to: false`, "info");
+    addLog("flag", `Override: ${key}`, { value: false });
+  }
+
+  saveSession();
+  renderAllFlags(allFlagsData);
+  // Also refresh the hedgehog flag cards if one of the three was toggled
+  if (["hog-spin", "hog-dance", "hog-action"].includes(key)) {
+    renderFlags(allFlagsData);
+  }
 }
 
 // ── Identify / Reset ──
@@ -221,8 +472,9 @@ function identifyUser() {
   toast(`Identified as ${distinctId}`, "success");
   addLog("identify", `Identified: ${distinctId}`, properties);
 
-  // Re-fetch flags for this user
+  saveSession();
   fetchFlags();
+  fetchAllFlags();
 }
 
 function resetUser() {
@@ -232,10 +484,15 @@ function resetUser() {
   const newId = posthog.get_distinct_id();
   $("#current-distinct-id").textContent = newId;
   $("#user-display").textContent = "Not identified";
+  $("#distinct-id").value = "";
+  $("#person-email").value = "";
+  $("#person-name").value = "";
   toast("Person reset. New anonymous ID generated.", "info");
   addLog("identify", "Person Reset", { new_distinct_id: newId });
 
+  saveSession();
   fetchFlags();
+  fetchAllFlags();
 }
 
 function setPersonProperties() {
@@ -255,6 +512,7 @@ function setPersonProperties() {
   posthog.setPersonProperties(properties);
   toast("Person properties set!", "success");
   addLog("identify", "Set Person Properties", properties);
+  saveSession();
 }
 
 // ── Events ──
@@ -329,7 +587,8 @@ function throwRealError() {
 
 document.addEventListener("DOMContentLoaded", () => {
   // Setup
-  $("#btn-connect").addEventListener("click", initPostHog);
+  $("#btn-connect").addEventListener("click", () => initPostHog(false));
+  $("#btn-disconnect").addEventListener("click", disconnectPostHog);
 
   // Identify
   $("#btn-identify").addEventListener("click", identifyUser);
@@ -337,7 +596,10 @@ document.addEventListener("DOMContentLoaded", () => {
   $("#btn-set-props").addEventListener("click", setPersonProperties);
 
   // Feature flags
-  $("#btn-reload-flags").addEventListener("click", reloadFlags);
+  $("#btn-reload-flags").addEventListener("click", () => { reloadFlags(); fetchAllFlags(); });
+
+  // All flags
+  $("#btn-refresh-all-flags").addEventListener("click", fetchAllFlags);
 
   // Quick events
   $$(".quick-event").forEach((btn) => {
@@ -359,9 +621,12 @@ document.addEventListener("DOMContentLoaded", () => {
   $("#btn-clear-log").addEventListener("click", () => {
     eventLog.length = 0;
     renderLog();
-    $("#log-empty").classList.remove("hidden");
   });
 
-  // Try to fetch flags on load (even before PostHog JS init, the server can evaluate)
+  // Restore saved session (auto-reconnect if previously connected)
+  restoreSession();
+
+  // Fetch flags on load from server
   fetchFlags();
+  fetchAllFlags();
 });

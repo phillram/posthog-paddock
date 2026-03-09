@@ -51,6 +51,17 @@ class FlagCache:
         self._cache_time = 0
         return self.get_flags(distinct_id)
 
+    def get_all_flags(self, distinct_id="anonymous"):
+        """Return all feature flags for a user using the SDK's get_all_flags."""
+        return self.client.get_all_flags(distinct_id, only_evaluate_locally=True)
+
+    def get_flag_definitions(self):
+        """Return raw flag definitions the SDK has loaded."""
+        try:
+            return self.client.feature_flags or []
+        except Exception:
+            return []
+
     def cache_age(self):
         """Return how many seconds since the cache was last populated."""
         if self._cache_time == 0:
