@@ -1,4 +1,6 @@
 /* ── PostHog Paddock – Frontend Logic ── */
+/* All feature flags are evaluated on the Python backend (local evaluation). */
+/* The JS frontend is a display layer + sends events/errors via posthog-js. */
 
 // ── GIF URLs for feature flag variants ──
 
@@ -21,7 +23,7 @@ const GIFS = {
 let posthogReady = false;
 const eventLog = [];
 let allFlagsData = {};
-let flagOverrides = {}; // tracks which flags have been locally overridden
+let currentOverrides = {}; // mirrors what the Python backend has
 
 // ── DOM helpers ──
 
@@ -70,7 +72,15 @@ function renderLog() {
     .join("");
 }
 
-// ── localStorage persistence (identity only, no API keys) ──
+function getDistinctId() {
+  try {
+    return posthogReady ? posthog.get_distinct_id() || "anonymous" : "anonymous";
+  } catch {
+    return "anonymous";
+  }
+}
+
+// ── localStorage persistence (identity only) ──
 
 const STORAGE_KEY = "paddock_session";
 
@@ -79,7 +89,6 @@ function saveSession() {
     distinctId: $("#distinct-id").value.trim(),
     email: $("#person-email").value.trim(),
     personName: $("#person-name").value.trim(),
-    flagOverrides,
   };
   localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
 }
@@ -94,10 +103,6 @@ function loadSession() {
   }
 }
 
-function clearSession() {
-  localStorage.removeItem(STORAGE_KEY);
-}
-
 function restoreSession() {
   const session = loadSession();
   if (!session) return;
@@ -105,7 +110,6 @@ function restoreSession() {
   if (session.distinctId) $("#distinct-id").value = session.distinctId;
   if (session.email) $("#person-email").value = session.email;
   if (session.personName) $("#person-name").value = session.personName;
-  if (session.flagOverrides) flagOverrides = session.flagOverrides;
 
   // Re-identify if there was a saved identity
   if (session.distinctId && posthogReady) {
@@ -118,13 +122,13 @@ function restoreSession() {
   }
 }
 
-// ── PostHog JS auto-init from server config ──
+// ── PostHog JS init (events/errors/identify only, NO flag evaluation) ──
 
 function initPostHog() {
   const config = window.PADDOCK_CONFIG || {};
   if (!config.apiKey) {
     $("#status-dot").className = "status-dot err";
-    $("#status-text").textContent = "No API key configured";
+    $("#status-text").textContent = "No API key in .env";
     return;
   }
 
@@ -133,6 +137,8 @@ function initPostHog() {
     capture_pageview: true,
     capture_pageleave: true,
     autocapture: true,
+    // Disable client-side flag evaluation — all flags come from Python backend
+    advanced_disable_feature_flags: true,
   });
 
   posthogReady = true;
@@ -143,16 +149,13 @@ function initPostHog() {
   addLog("event", "PostHog Initialized", { host: config.apiHost });
 }
 
-// ── Feature Flags (fetched from Python backend cache) ──
+// ── Feature Flags (all evaluated on Python backend via local evaluation) ──
 
-// Track current hedgehog flag values and their source
 let currentHogFlags = { "hog-spin": null, "hog-dance": null, "hog-action": null };
 
 async function fetchFlags() {
-  let distinctId = "anonymous";
-  try { distinctId = posthogReady ? posthog.get_distinct_id() || "anonymous" : "anonymous"; } catch {}
   try {
-    const res = await fetch(`/api/flags?distinct_id=${encodeURIComponent(distinctId)}`);
+    const res = await fetch(`/api/flags?distinct_id=${encodeURIComponent(getDistinctId())}`);
     const data = await res.json();
 
     if (data.error) {
@@ -160,17 +163,10 @@ async function fetchFlags() {
       return;
     }
 
-    // Only apply server values for flags that aren't locally overridden
-    const merged = { ...data.flags };
-    for (const key of Object.keys(flagOverrides)) {
-      if (key in merged) {
-        merged[key] = flagOverrides[key];
-      }
-    }
-
-    renderFlags(merged, data.flags);
+    currentOverrides = data.overrides || {};
+    renderFlags(data.flags);
     $("#cache-info").textContent = `Cache age: ${data.cache_age_seconds ?? "–"}s · Evaluated for: ${data.distinct_id}`;
-    addLog("flag", "Flags Loaded", data.flags);
+    addLog("flag", "Flags Loaded (Python local eval)", data.flags);
   } catch (err) {
     toast("Failed to fetch flags from server.", "error");
     console.error(err);
@@ -178,13 +174,11 @@ async function fetchFlags() {
 }
 
 async function reloadFlags() {
-  let distinctId = "anonymous";
-  try { distinctId = posthogReady ? posthog.get_distinct_id() || "anonymous" : "anonymous"; } catch {}
   try {
     const res = await fetch("/api/flags/reload", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ distinct_id: distinctId }),
+      body: JSON.stringify({ distinct_id: getDistinctId() }),
     });
     if (!res.ok) {
       const errData = await res.json().catch(() => ({}));
@@ -192,38 +186,59 @@ async function reloadFlags() {
       return;
     }
     const data = await res.json();
-
-    // Clear local overrides on server reload
-    flagOverrides = {};
-    saveSession();
-
-    renderFlags(data.flags, data.flags);
+    currentOverrides = data.overrides || {};
+    renderFlags(data.flags);
     $("#cache-info").textContent = `Cache age: 0s · Evaluated for: ${data.distinct_id}`;
-    toast("Flags reloaded from server! Local overrides cleared.", "success");
-    addLog("flag", "Flags Reloaded (server)", data.flags);
+    toast("Flags reloaded! Overrides cleared.", "success");
+    addLog("flag", "Flags Reloaded (Python local eval)", data.flags);
   } catch (err) {
     toast("Failed to reload flags: " + err.message, "error");
-    console.error("Reload flags error:", err);
+    console.error(err);
   }
 }
 
-function renderFlags(flags, serverFlags) {
+async function setFlagVariant(flagKey, value) {
+  try {
+    const res = await fetch("/api/flags/override", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ key: flagKey, value, distinct_id: getDistinctId() }),
+    });
+    const data = await res.json();
+
+    if (data.error) {
+      toast(data.error, "error");
+      return;
+    }
+
+    currentOverrides = data.overrides || {};
+    renderFlags(data.flags);
+
+    // Also update the all-flags list
+    if (flagKey in allFlagsData) {
+      allFlagsData[flagKey] = value;
+      renderAllFlags(allFlagsData);
+    }
+
+    const displayValue = value === true ? "true" : value === false ? "false" : value;
+    toast(`${flagKey} → ${displayValue} (Python override)`, "success");
+    addLog("flag", `Override: ${flagKey}`, { value: displayValue, source: "python" });
+  } catch (err) {
+    toast("Failed to set override: " + err.message, "error");
+    console.error(err);
+  }
+}
+
+function renderFlags(flags) {
   currentHogFlags = {
     "hog-spin": flags["hog-spin"],
     "hog-dance": flags["hog-dance"],
     "hog-action": flags["hog-action"],
   };
 
-  // Determine source for each flag
-  const sources = {};
-  for (const key of ["hog-spin", "hog-dance", "hog-action"]) {
-    sources[key] = (key in flagOverrides) ? "local" : "server";
-  }
-
   // ── hog-spin: boolean ──
   const spinValue = flags["hog-spin"];
-  let spinHtml;
-  let spinBadge;
+  let spinHtml, spinBadge;
 
   if (spinValue === true) {
     spinHtml = `<img src="${GIFS.spin}" alt="Spinning hedgehog" class="flag-img">`;
@@ -235,12 +250,11 @@ function renderFlags(flags, serverFlags) {
 
   $("#flag-spin-display").innerHTML = spinHtml;
   $("#flag-spin-badge").innerHTML = spinBadge;
-  $("#flag-spin-source").innerHTML = sourceLabel(sources["hog-spin"]);
+  $("#flag-spin-source").innerHTML = sourceLabel("hog-spin");
 
   // ── hog-dance: multivariate ──
   const danceValue = flags["hog-dance"];
-  let danceHtml;
-  let danceBadge;
+  let danceHtml, danceBadge;
 
   if (danceValue === "sonic") {
     danceHtml = `<img src="${GIFS.dance.sonic}" alt="Sonic dance" class="flag-img">`;
@@ -258,12 +272,11 @@ function renderFlags(flags, serverFlags) {
 
   $("#flag-dance-display").innerHTML = danceHtml;
   $("#flag-dance-badge").innerHTML = danceBadge;
-  $("#flag-dance-source").innerHTML = sourceLabel(sources["hog-dance"]);
+  $("#flag-dance-source").innerHTML = sourceLabel("hog-dance");
 
   // ── hog-action: multivariate ──
   const actionValue = flags["hog-action"];
-  let actionHtml;
-  let actionBadge;
+  let actionHtml, actionBadge;
 
   if (actionValue === "run") {
     actionHtml = `<img src="${GIFS.action.run}" alt="Running hedgehog" class="flag-img">`;
@@ -281,16 +294,16 @@ function renderFlags(flags, serverFlags) {
 
   $("#flag-action-display").innerHTML = actionHtml;
   $("#flag-action-badge").innerHTML = actionBadge;
-  $("#flag-action-source").innerHTML = sourceLabel(sources["hog-action"]);
+  $("#flag-action-source").innerHTML = sourceLabel("hog-action");
 
   highlightVariantButtons();
 }
 
-function sourceLabel(source) {
-  if (source === "local") {
-    return `<span class="badge-local">LOCAL OVERRIDE</span>`;
+function sourceLabel(flagKey) {
+  if (flagKey in currentOverrides) {
+    return `<span class="badge-local">PYTHON OVERRIDE</span>`;
   }
-  return `<span class="badge-server">SERVER</span>`;
+  return `<span class="badge-server">PYTHON LOCAL EVAL</span>`;
 }
 
 function highlightVariantButtons() {
@@ -305,9 +318,7 @@ function highlightVariantButtons() {
     else if (btnValue === "false") btnValue = false;
     else btnValue = btnValue.replace(/^'|'$/g, "");
 
-    const currentValue = currentHogFlags[key];
-
-    if (currentValue === btnValue) {
+    if (currentHogFlags[key] === btnValue) {
       btn.classList.add("active");
     } else {
       btn.classList.remove("active");
@@ -315,48 +326,18 @@ function highlightVariantButtons() {
   });
 }
 
-function setFlagVariant(flagKey, value) {
-  // Mark as local override
-  posthog.featureFlags.override({ [flagKey]: value });
-  flagOverrides[flagKey] = value;
-
-  // Update display immediately
-  currentHogFlags[flagKey] = value;
-  renderFlags(currentHogFlags, null);
-
-  // Also update the all-flags list
-  if (flagKey in allFlagsData) {
-    allFlagsData[flagKey] = value;
-    renderAllFlags(allFlagsData);
-  }
-
-  const displayValue = value === true ? "true" : value === false ? "false" : value;
-  toast(`${flagKey} → ${displayValue} (local override)`, "success");
-  addLog("flag", `Set ${flagKey}`, { value: displayValue, source: "local" });
-  saveSession();
-}
-
 // ── All Project Flags ──
 
 async function fetchAllFlags() {
-  let distinctId = "anonymous";
-  try { distinctId = posthogReady ? posthog.get_distinct_id() || "anonymous" : "anonymous"; } catch {}
   try {
-    const res = await fetch(`/api/flags/all?distinct_id=${encodeURIComponent(distinctId)}`);
+    const res = await fetch(`/api/flags/all?distinct_id=${encodeURIComponent(getDistinctId())}`);
     const data = await res.json();
     if (data.error) {
       toast(data.error, "error");
       return;
     }
     allFlagsData = data.flags || {};
-
-    // Apply local overrides on top
-    for (const key of Object.keys(flagOverrides)) {
-      if (key in allFlagsData) {
-        allFlagsData[key] = flagOverrides[key];
-      }
-    }
-
+    currentOverrides = data.overrides || {};
     renderAllFlags(allFlagsData);
   } catch (err) {
     console.error("Failed to fetch all flags:", err);
@@ -378,10 +359,10 @@ function renderAllFlags(flags) {
       const value = flags[key];
       const isActive = value !== false && value !== null && value !== undefined;
       const displayValue = value === true ? "true" : value === false ? "false" : value === null ? "null" : String(value);
-      const isOverridden = key in flagOverrides;
+      const isOverridden = key in currentOverrides;
       const sourceBadge = isOverridden
-        ? `<span class="badge-local">LOCAL</span>`
-        : `<span class="badge-server">SERVER</span>`;
+        ? `<span class="badge-local">OVERRIDE</span>`
+        : `<span class="badge-server">LOCAL EVAL</span>`;
 
       return `
         <div class="flag-row ${isActive ? "active" : ""}">
@@ -394,7 +375,7 @@ function renderAllFlags(flags) {
             ${sourceBadge}
           </span>
           <span class="flag-status text-xs ${isActive ? "" : "text-muted"}">${isActive ? "Applied" : "Not applied"}</span>
-          <label class="toggle" title="Toggle override for this flag">
+          <label class="toggle" title="Toggle this flag on the Python backend">
             <input type="checkbox" data-flag-key="${escapeHtml(key)}" ${isActive ? "checked" : ""} onchange="toggleFlagOverride(this)">
             <span class="toggle-slider"></span>
           </label>
@@ -409,31 +390,21 @@ function escapeHtml(str) {
   return div.innerHTML;
 }
 
-function toggleFlagOverride(checkbox) {
+async function toggleFlagOverride(checkbox) {
   const key = checkbox.dataset.flagKey;
   const currentValue = allFlagsData[key];
 
+  let newValue;
   if (checkbox.checked) {
-    const overrideValue = (currentValue === false || currentValue === null) ? true : currentValue;
-    posthog.featureFlags.override({ [key]: overrideValue });
-    flagOverrides[key] = overrideValue;
-    allFlagsData[key] = overrideValue;
-    toast(`Flag "${key}" → ${overrideValue} (local override)`, "success");
-    addLog("flag", `Override: ${key}`, { value: overrideValue, source: "local" });
+    newValue = (currentValue === false || currentValue === null) ? true : currentValue;
   } else {
-    posthog.featureFlags.override({ [key]: false });
-    flagOverrides[key] = false;
-    allFlagsData[key] = false;
-    toast(`Flag "${key}" → false (local override)`, "info");
-    addLog("flag", `Override: ${key}`, { value: false, source: "local" });
+    newValue = false;
   }
 
-  saveSession();
-  renderAllFlags(allFlagsData);
-  if (["hog-spin", "hog-dance", "hog-action"].includes(key)) {
-    currentHogFlags[key] = allFlagsData[key];
-    renderFlags(currentHogFlags, null);
-  }
+  // Send override to Python backend
+  await setFlagVariant(key, newValue);
+  // Refresh the all-flags list
+  await fetchAllFlags();
 }
 
 // ── Identify / Reset ──
@@ -465,14 +436,13 @@ function resetUser() {
   if (!posthogReady) { toast("PostHog not connected.", "error"); return; }
 
   posthog.reset();
-  flagOverrides = {};
   const newId = posthog.get_distinct_id();
   $("#current-distinct-id").textContent = newId;
   $("#user-display").textContent = "Not identified";
   $("#distinct-id").value = "";
   $("#person-email").value = "";
   $("#person-name").value = "";
-  toast("Person reset. New anonymous ID generated. Overrides cleared.", "info");
+  toast("Person reset. New anonymous ID generated.", "info");
   addLog("identify", "Person Reset", { new_distinct_id: newId });
 
   saveSession();
@@ -563,10 +533,8 @@ function throwRealError() {
 // ── Event listeners ──
 
 document.addEventListener("DOMContentLoaded", () => {
-  // Auto-init PostHog from server-provided config
+  // Auto-init PostHog (events/errors/identify only, flags from Python)
   initPostHog();
-
-  // Restore saved identity and overrides
   restoreSession();
 
   // Identify
@@ -574,10 +542,8 @@ document.addEventListener("DOMContentLoaded", () => {
   $("#btn-reset").addEventListener("click", resetUser);
   $("#btn-set-props").addEventListener("click", setPersonProperties);
 
-  // Feature flags
+  // Feature flags (all handled by Python backend)
   $("#btn-reload-flags").addEventListener("click", () => { reloadFlags(); fetchAllFlags(); });
-
-  // All flags
   $("#btn-refresh-all-flags").addEventListener("click", fetchAllFlags);
 
   // Quick events
@@ -602,7 +568,7 @@ document.addEventListener("DOMContentLoaded", () => {
     renderLog();
   });
 
-  // Fetch flags from server
+  // Fetch all flags from Python backend
   fetchFlags();
   fetchAllFlags();
 });

@@ -10,7 +10,7 @@ load_dotenv()
 
 app = Flask(__name__)
 
-# --- PostHog flag cache (server-side local evaluation) ---
+# --- PostHog flag cache (local evaluation on Python side) ---
 
 PROJECT_API_KEY = os.getenv("POSTHOG_PROJECT_API_KEY", "")
 PERSONAL_API_KEY = os.getenv("POSTHOG_PERSONAL_API_KEY", "")
@@ -35,15 +35,17 @@ def index():
 
 @app.route("/api/flags")
 def get_flags():
-    """Return locally-evaluated, cached feature flag values."""
+    """Return locally-evaluated, cached feature flag values (with overrides)."""
     if not flag_cache:
         return jsonify({"error": "PostHog not configured. Set .env variables."}), 503
 
     distinct_id = request.args.get("distinct_id", "anonymous")
     flags = flag_cache.get_flags(distinct_id)
+    overrides = flag_cache.get_overrides()
 
     return jsonify({
         "flags": flags,
+        "overrides": overrides,
         "cache_age_seconds": flag_cache.cache_age(),
         "evaluated_at": datetime.now(timezone.utc).isoformat(),
         "distinct_id": distinct_id,
@@ -52,7 +54,7 @@ def get_flags():
 
 @app.route("/api/flags/reload", methods=["POST"])
 def reload_flags():
-    """Force-refresh flag definitions and re-evaluate."""
+    """Force-refresh flag definitions, clear overrides, and re-evaluate."""
     if not flag_cache:
         return jsonify({"error": "PostHog not configured. Set .env variables."}), 503
 
@@ -61,23 +63,70 @@ def reload_flags():
 
     return jsonify({
         "flags": flags,
+        "overrides": {},
         "cache_age_seconds": 0,
         "evaluated_at": datetime.now(timezone.utc).isoformat(),
         "distinct_id": distinct_id,
     })
 
 
+@app.route("/api/flags/override", methods=["POST"])
+def override_flag():
+    """Set or clear a manual override for a flag (evaluated on Python side)."""
+    if not flag_cache:
+        return jsonify({"error": "PostHog not configured. Set .env variables."}), 503
+
+    data = request.json or {}
+    key = data.get("key")
+    value = data.get("value")
+
+    if not key:
+        return jsonify({"error": "Missing 'key' in request body."}), 400
+
+    flag_cache.set_override(key, value)
+
+    distinct_id = data.get("distinct_id", "anonymous")
+    flags = flag_cache.get_flags(distinct_id)
+    overrides = flag_cache.get_overrides()
+
+    return jsonify({
+        "flags": flags,
+        "overrides": overrides,
+        "distinct_id": distinct_id,
+    })
+
+
+@app.route("/api/flags/clear-overrides", methods=["POST"])
+def clear_overrides():
+    """Clear all manual flag overrides."""
+    if not flag_cache:
+        return jsonify({"error": "PostHog not configured. Set .env variables."}), 503
+
+    flag_cache.clear_overrides()
+
+    distinct_id = request.json.get("distinct_id", "anonymous") if request.json else "anonymous"
+    flags = flag_cache.get_flags(distinct_id)
+
+    return jsonify({
+        "flags": flags,
+        "overrides": {},
+        "distinct_id": distinct_id,
+    })
+
+
 @app.route("/api/flags/all")
 def get_all_flags():
-    """Return all feature flags and their values for a user."""
+    """Return all feature flags and their values for a user (with overrides)."""
     if not flag_cache:
         return jsonify({"error": "PostHog not configured. Set .env variables."}), 503
 
     distinct_id = request.args.get("distinct_id", "anonymous")
     all_flags = flag_cache.get_all_flags(distinct_id)
+    overrides = flag_cache.get_overrides()
 
     return jsonify({
         "flags": all_flags,
+        "overrides": overrides,
         "distinct_id": distinct_id,
     })
 
