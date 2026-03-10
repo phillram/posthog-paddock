@@ -8,41 +8,26 @@
 </head>
 <body>
 
+  <!-- Inject server config for JS -->
+  <script>
+    window.PADDOCK_CONFIG = {
+      apiKey: "{{ project_api_key }}",
+      apiHost: "{{ posthog_host }}",
+    };
+  </script>
+
   <!-- ── Header ── -->
   <header>
     <div class="container inner">
       <h1>🦔 <span>PostHog</span> Paddock</h1>
       <div class="header-right">
         <span id="user-display" class="text-sm text-muted">Not identified</span>
-        <span><span id="status-dot" class="status-dot err"></span><span id="status-text">Disconnected</span></span>
+        <span><span id="status-dot" class="status-dot err"></span><span id="status-text">Connecting…</span></span>
       </div>
     </div>
   </header>
 
   <main class="container">
-
-    <!-- ── Setup ── -->
-    <section id="setup-section">
-      <h2>⚙️ Setup</h2>
-      <p class="text-sm text-muted mb-1">Enter your PostHog Project API key to initialize the client-side SDK. Server-side flags are configured via <code>.env</code>.</p>
-      <div class="grid-2">
-        <div class="form-row">
-          <label for="api-key">Project API Key</label>
-          <input id="api-key" type="text" placeholder="phc_..." value="{{ project_api_key }}">
-        </div>
-        <div class="form-row">
-          <label for="api-host">API Host</label>
-          <select id="api-host">
-            <option value="https://us.i.posthog.com" {{ 'selected' if posthog_host == 'https://us.i.posthog.com' }}>US Cloud</option>
-            <option value="https://eu.i.posthog.com" {{ 'selected' if posthog_host == 'https://eu.i.posthog.com' }}>EU Cloud</option>
-          </select>
-        </div>
-      </div>
-      <div class="btn-group mt-1">
-        <button id="btn-connect" class="primary">Connect</button>
-        <button id="btn-disconnect" class="danger hidden">Disconnect &amp; Clear Saved Session</button>
-      </div>
-    </section>
 
     <!-- ── Identify ── -->
     <section id="identify-section">
@@ -76,8 +61,8 @@
 
     <!-- ── Feature Flags (from server cache) ── -->
     <section id="flags-section">
-      <h2>🚩 Feature Flags <span class="text-xs text-muted">(server-side local evaluation)</span></h2>
-      <p class="text-sm text-muted mb-1">These flags are evaluated locally by the Python backend using the PostHog SDK and cached. The frontend fetches the cached results.</p>
+      <h2>🚩 Feature Flags</h2>
+      <p class="text-sm text-muted mb-1">Flags are evaluated server-side (Python SDK, local evaluation + cache). Clicking a variant switches to a local client-side override.</p>
 
       <div class="grid-3" id="flag-cards">
 
@@ -85,6 +70,7 @@
         <div class="card">
           <h3>hog-spin</h3>
           <p class="text-xs text-muted mb-1">Boolean flag</p>
+          <div id="flag-spin-source" class="flag-source mt-1"></div>
           <div id="flag-spin-display">
             <div class="flag-loading">Loading…</div>
           </div>
@@ -99,6 +85,7 @@
         <div class="card">
           <h3>hog-dance</h3>
           <p class="text-xs text-muted mb-1">Variants: sonic · cgi · triple</p>
+          <div id="flag-dance-source" class="flag-source mt-1"></div>
           <div id="flag-dance-display">
             <div class="flag-loading">Loading…</div>
           </div>
@@ -115,6 +102,7 @@
         <div class="card">
           <h3>hog-action</h3>
           <p class="text-xs text-muted mb-1">Variants: run · sleep · swim</p>
+          <div id="flag-action-source" class="flag-source mt-1"></div>
           <div id="flag-action-display">
             <div class="flag-loading">Loading…</div>
           </div>
