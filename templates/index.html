@@ -62,7 +62,7 @@
     <!-- ── Feature Flags (from server cache) ── -->
     <section id="flags-section">
       <h2>🚩 Feature Flags</h2>
-      <p class="text-sm text-muted mb-1">Flags are evaluated server-side (Python SDK, local evaluation + cache). Clicking a variant switches to a local client-side override.</p>
+      <p class="text-sm text-muted mb-1">Flags are evaluated server-side (Python SDK, local evaluation + cache). Clicking a variant sets an override on the Python backend.</p>
 
       <div class="grid-3" id="flag-cards">
 
@@ -129,7 +129,7 @@
         🏁 All Project Flags
         <button id="btn-refresh-all-flags" class="sm">Refresh</button>
       </h2>
-      <p class="text-sm text-muted mb-1">All feature flags on the project. Flags applied to the current user are highlighted. Use the toggle to override a flag for this user via <code>posthog-js</code>.</p>
+      <p class="text-sm text-muted mb-1">All feature flags on the project. Flags applied to the current user are highlighted. Use the toggle to override a flag for this user via the Python backend.</p>
       <div id="all-flags-list">
         <p class="text-sm text-muted">Loading flags…</p>
       </div>
